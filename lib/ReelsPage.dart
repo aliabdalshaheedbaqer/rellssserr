@@ -137,7 +137,7 @@ class _ReelsPageState extends State<ReelsPage> with WidgetsBindingObserver {
         errorBuilder: (context, error, stackTrace) =>
             Container(color: Colors.black),
       ),
-      autoDispose: false,
+      autoDispose: true,
       deviceOrientationsAfterFullScreen: [DeviceOrientation.portraitUp],
     );
 
