@@ -1,6 +1,6 @@
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:rellssserr/ReelsState.dart';
-import 'package:rellssserr/Video%20Model.dart';
+import 'package:rellssserr/VideoModel.dart';
 
 class ReelsCubit extends Cubit<ReelsState> {
   ReelsCubit() : super(ReelsInitial());

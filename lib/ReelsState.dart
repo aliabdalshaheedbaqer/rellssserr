@@ -1,6 +1,6 @@
 import 'package:equatable/equatable.dart';
 import 'package:flutter/foundation.dart';
-import 'package:rellssserr/Video%20Model.dart';
+import 'package:rellssserr/VideoModel.dart';
 
 
 @immutable

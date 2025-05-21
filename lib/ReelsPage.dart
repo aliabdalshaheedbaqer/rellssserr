@@ -4,7 +4,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:rellssserr/ReelsCubit.dart';
 import 'package:rellssserr/ReelsState.dart';
-import 'package:rellssserr/Video%20Model.dart';
+import 'package:rellssserr/VideoModel.dart';
 
 
 class ReelsPage extends StatefulWidget {
@@ -16,89 +16,86 @@ class ReelsPage extends StatefulWidget {
 
 class _ReelsPageState extends State<ReelsPage> with WidgetsBindingObserver {
   late PageController _pageController;
-  List<BetterPlayerController?> _controllers = [];
+  final Map<int, BetterPlayerController?> _controllerMap = {};
   int _currentVideoIndex = 0;
   bool _isDisposed = false;
+  bool _isChangingPage = false;
   
   @override
   void initState() {
     super.initState();
-    WidgetsBinding.instance.addObserver(this); // إضافة مراقب دورة حياة التطبيق
+    WidgetsBinding.instance.addObserver(this);
     _pageController = PageController();
     
-    final videos = VideoModel.getSampleVideos();
-    _controllers = List.generate(videos.length, (_) => null);
-    
-    // تحميل مسبق لأول فيديو فقط
-    _preloadInitialVideos();
+    // Initialize the first video controller after the first frame is rendered
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted && !_isDisposed) {
+        _initializeControllerAtIndex(0);
+      }
+    });
   }
   
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    // التعامل مع تغييرات دورة حياة التطبيق
-    if (state == AppLifecycleState.paused ||
-        state == AppLifecycleState.inactive) {
-      // إيقاف جميع الفيديوهات عند مغادرة التطبيق
+    if (state == AppLifecycleState.paused || state == AppLifecycleState.inactive) {
       _pauseAllControllers();
     } else if (state == AppLifecycleState.resumed) {
-      // عند العودة للتطبيق، تشغيل الفيديو الحالي فقط
-      _playCurrentVideoOnly();
+      _playControllerAtIndex(_currentVideoIndex);
     }
   }
   
+  /// Safely pause all active controllers
   void _pauseAllControllers() {
-    // إيقاف جميع المشغلات
-    for (final controller in _controllers) {
+    if (_isDisposed) return;
+    
+    _controllerMap.forEach((_, controller) {
       if (controller != null) {
         controller.pause();
       }
-    }
-  }
-  
-  void _playCurrentVideoOnly() {
-    // التأكد من أن الفيديو الحالي فقط هو الذي يتم تشغيله
-    if (!_isDisposed && _controllers.isNotEmpty) {
-      for (int i = 0; i < _controllers.length; i++) {
-        if (i == _currentVideoIndex && _controllers[i] != null) {
-          _controllers[i]!.play();
-        } else if (_controllers[i] != null) {
-          _controllers[i]!.pause();
-        }
-      }
-    }
-  }
-  
-  void _preloadInitialVideos() {
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (context.mounted && !_isDisposed) {
-        final state = context.read<ReelsCubit>().state;
-        if (state is ReelsLoaded) {
-          // تحميل الفيديو الأول فقط
-          _controllers[0] = _createController(state.videos[0]);
-          _controllers[0]?.play();
-        }
-      }
     });
   }
-
-  @override
-  void dispose() {
-    WidgetsBinding.instance.removeObserver(this); // إزالة المراقب
-    _isDisposed = true;
-    _pageController.dispose();
+  
+  /// Safely play the controller at the specified index
+  void _playControllerAtIndex(int index) {
+    if (_isDisposed) return;
     
-    // التخلص من جميع المتحكمين بشكل صحيح
-    for (int i = 0; i < _controllers.length; i++) {
-      if (_controllers[i] != null) {
-        _controllers[i]!.pause();
-        _controllers[i]!.dispose();
-        _controllers[i] = null;
-      }
+    // Pause all controllers first
+    _pauseAllControllers();
+    
+    // Play only the controller at the specified index
+    final controller = _controllerMap[index];
+    if (controller != null) {
+      controller.play();
+    } else {
+      // If controller doesn't exist yet, create it
+      _initializeControllerAtIndex(index);
     }
-    
-    super.dispose();
   }
 
+  /// Initialize the controller at the specified index
+  void _initializeControllerAtIndex(int index) {
+    if (_isDisposed || !mounted) return;
+    
+    final state = context.read<ReelsCubit>().state;
+    if (state is! ReelsLoaded) return;
+    
+    if (index >= 0 && index < state.videos.length && _controllerMap[index] == null) {
+      final video = state.videos[index];
+      final controller = _createController(video);
+      
+      if (mounted && !_isDisposed) {
+        setState(() {
+          _controllerMap[index] = controller;
+        });
+        
+        if (index == _currentVideoIndex) {
+          controller.play();
+        }
+      }
+    }
+  }
+
+  /// Create a new controller for the specified video
   BetterPlayerController _createController(VideoModel video) {
     final betterPlayerDataSource = BetterPlayerDataSource(
       BetterPlayerDataSourceType.network,
@@ -118,10 +115,10 @@ class _ReelsPageState extends State<ReelsPage> with WidgetsBindingObserver {
     );
 
     final betterPlayerConfiguration = BetterPlayerConfiguration(
-      autoPlay: false, // تم تغييره إلى false لتجنب التشغيل التلقائي المتعدد
+      autoPlay: false,
       looping: true,
       fit: BoxFit.cover,
-      handleLifecycle: true, // التعامل مع دورة حياة التطبيق
+      handleLifecycle: false, // We'll handle lifecycle ourselves
       controlsConfiguration: const BetterPlayerControlsConfiguration(
         showControls: false,
         enableMute: false,
@@ -131,13 +128,11 @@ class _ReelsPageState extends State<ReelsPage> with WidgetsBindingObserver {
         enableSkips: false,
         enablePlaybackSpeed: false,
       ),
-      placeholder: Image.network(
-        video.thumbnailUrl,
-        fit: BoxFit.cover,
-        errorBuilder: (context, error, stackTrace) =>
-            Container(color: Colors.black),
+      placeholder: Container(
+        color: Colors.black,
+        child: const Center(child: CircularProgressIndicator()),
       ),
-      autoDispose: true,
+      autoDispose: false, // We'll handle disposal manually
       deviceOrientationsAfterFullScreen: [DeviceOrientation.portraitUp],
     );
 
@@ -145,89 +140,108 @@ class _ReelsPageState extends State<ReelsPage> with WidgetsBindingObserver {
       ..setupDataSource(betterPlayerDataSource);
   }
 
-  void _handlePageChange(int index, BuildContext context) {
-    final videos = (context.read<ReelsCubit>().state as ReelsLoaded).videos;
-    
-    // تخزين الفهرس الحالي
-    _currentVideoIndex = index;
-    
-    // تحديث حالة الـ cubit
-    context.read<ReelsCubit>().changeVideo(index);
-    
-    // إيقاف وتفريغ جميع الفيديوهات باستثناء المجاورة للفيديو الحالي
-    for (int i = 0; i < _controllers.length; i++) {
-      if (i == index) {
-        // تهيئة المتحكم إذا كان فارغًا
-        _controllers[i] ??= _createController(videos[i]);
-        
-        // توقف قصير قبل التشغيل للتأكد من توقف أي فيديوهات أخرى
-        Future.delayed(const Duration(milliseconds: 50), () {
-          if (!_isDisposed && _controllers[i] != null) {
-            _controllers[i]!.play();
-          }
-        });
-      } 
-      // التعامل مع الفيديوهات المجاورة - تحميل مسبق لكن إيقاف التشغيل
-      else if (i == index - 1 || i == index + 1) {
-        if (_controllers[i] == null && i >= 0 && i < videos.length) {
-          _controllers[i] = _createController(videos[i]);
-        }
-        
-        if (_controllers[i] != null) {
-          _controllers[i]!.pause();
-        }
-      }
-      // التخلص من الفيديوهات البعيدة عن العرض الحالي
-      else if (_controllers[i] != null) {
-        _controllers[i]!.pause();
-        
-        // تأخير قصير للتأكد من توقف الفيديو قبل التخلص منه
-        Future.delayed(const Duration(milliseconds: 50), () {
-          if (!_isDisposed && _controllers[i] != null) {
-            _controllers[i]!.dispose();
-            _controllers[i] = null;
-          }
-        });
-      }
+  /// Safely dispose of the controller at the specified index
+  void _disposeControllerAtIndex(int index) {
+    final controller = _controllerMap[index];
+    if (controller != null) {
+      // Remove the controller from the map first
+      _controllerMap.remove(index);
+      
+      // Then dispose it
+      controller.pause();
+      controller.dispose();
     }
   }
 
-  Widget _buildVideoPlayer(VideoModel video, int index) {
-    // تهيئة المتحكم إذا كان فارغًا، مع تأخير التشغيل للفيديوهات غير الحالية
-    if (_controllers[index] == null) {
-      _controllers[index] = _createController(video);
-      
-      // تشغيل الفيديو الحالي فقط
-      if (index == _currentVideoIndex) {
-        Future.delayed(const Duration(milliseconds: 50), () {
-          if (!_isDisposed && _controllers[index] != null) {
-            _controllers[index]!.play();
-          }
-        });
+  /// Safely manage controllers when changing pages
+  void _handlePageChange(int index, BuildContext context) {
+    if (_isDisposed || _isChangingPage) return;
+    
+    // Set flag to prevent concurrent page changes from interfering
+    _isChangingPage = true;
+    
+    final state = context.read<ReelsCubit>().state;
+    if (state is! ReelsLoaded) {
+      _isChangingPage = false;
+      return;
+    }
+    
+    // Update current index
+    _currentVideoIndex = index;
+    context.read<ReelsCubit>().changeVideo(index);
+    
+    // Determine which controllers to keep and which to dispose
+    final Set<int> indicesToKeep = {index};
+    if (index > 0) indicesToKeep.add(index - 1);
+    if (index < state.videos.length - 1) indicesToKeep.add(index + 1);
+    
+    // Create a list of indices to dispose (those not in indicesToKeep)
+    final List<int> indicesToDispose = _controllerMap.keys
+        .where((i) => !indicesToKeep.contains(i))
+        .toList();
+    
+    // Dispose controllers that are no longer needed
+    for (final i in indicesToDispose) {
+      _disposeControllerAtIndex(i);
+    }
+    
+    // Initialize controllers that need to be created
+    for (final i in indicesToKeep) {
+      if (_controllerMap[i] == null) {
+        _initializeControllerAtIndex(i);
       }
     }
     
+    // Play the current controller and pause others
+    _playControllerAtIndex(index);
+    
+    // Reset the flag
+    _isChangingPage = false;
+  }
+
+  @override
+  void dispose() {
+    _isDisposed = true;
+    WidgetsBinding.instance.removeObserver(this);
+    
+    // Dispose all controllers
+    final controllerKeys = _controllerMap.keys.toList();
+    for (final index in controllerKeys) {
+      _disposeControllerAtIndex(index);
+    }
+    
+    _pageController.dispose();
+    super.dispose();
+  }
+
+  Widget _buildVideoPlayer(VideoModel video, int index) {
+    // Initialize controller if needed
+    if (_controllerMap[index] == null) {
+      return AspectRatio(
+        aspectRatio: 9 / 16,
+        child: Container(
+          color: Colors.black,
+          child: const Center(child: CircularProgressIndicator()),
+        ),
+      );
+    }
+    
     return GestureDetector(
-      // إضافة خاصية النقر لإيقاف/تشغيل الفيديو
       onTap: () {
-        if (_controllers[index] != null) {
-          if (_controllers[index]!.isPlaying() ?? false) {
-            _controllers[index]!.pause();
+        final controller = _controllerMap[index];
+        if (controller != null) {
+          if (controller.isPlaying() ?? false) {
+            controller.pause();
           } else {
-            _controllers[index]!.play();
+            controller.play();
           }
         }
       },
       child: Stack(
         children: [
           AspectRatio(
-            aspectRatio: 9 / 16, // فيديو عمودي للريلز
-            child: _controllers[index] != null
-                ? BetterPlayer(controller: _controllers[index]!)
-                : Container(
-                    color: Colors.black,
-                    child: const Center(child: CircularProgressIndicator()),
-                  ),
+            aspectRatio: 9 / 16,
+            child: BetterPlayer(controller: _controllerMap[index]!),
           ),
           
           // واجهة المستخدم للفيديو
@@ -293,9 +307,7 @@ class _ReelsPageState extends State<ReelsPage> with WidgetsBindingObserver {
   @override
   Widget build(BuildContext context) {
     return WillPopScope(
-      // إضافة WillPopScope للتعامل مع الخروج من الصفحة
       onWillPop: () async {
-        // إيقاف جميع الفيديوهات قبل الخروج
         _pauseAllControllers();
         return true;
       },
@@ -328,7 +340,6 @@ class _ReelsPageState extends State<ReelsPage> with WidgetsBindingObserver {
                       padding: const EdgeInsets.all(16.0),
                       child: GestureDetector(
                         onTap: () {
-                          // إيقاف جميع الفيديوهات قبل الخروج
                           _pauseAllControllers();
                           Navigator.of(context).pop();
                         },
